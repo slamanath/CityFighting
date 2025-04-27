@@ -1,24 +1,44 @@
 import streamlit as st
 import pandas as pd
-import requests
-from datetime import datetime
+import glob
 import plotly.express as px
 from streamlit_option_menu import option_menu
 import base64
+import requests
 
 # === CONFIGURATION ===
 st.set_page_config(page_title="City Fighting", layout="wide")
 API_KEY = "a09666d1f639071454ec03d597754735"
 
-# === CHARGEMENT DES DONNÉES ===
-df_base = pd.read_csv("base_complete.csv", sep=';', encoding='ISO-8859-1')
-df_crimes = pd.read_csv("base_délits2.csv", sep=';', encoding='ISO-8859-1')
-df_diplomes = pd.read_csv("base_diplomes_formation.csv", sep=';', encoding='ISO-8859-1')
-df_sante = pd.read_csv("equipements_sante2.csv", sep=';', encoding='ISO-8859-1')
+# === FONCTIONS DE CHARGEMENT AVEC CACHE ===
 
-# === FILTRER LES VILLES > 20000 HABITANTS ===
-df_base = df_base[df_base["PMUN21"] > 20000]
-df_base['LIBGEO'] = df_base['LIBGEO'].astype(str)
+@st.cache_data
+def load_sante():
+    return pd.read_parquet('base_sante.parquet')
+
+@st.cache_data
+def load_diplomes():
+    return pd.read_parquet('base_diplome.parquet')
+
+@st.cache_data
+def load_crimes():
+    return pd.read_parquet('base_delits.parquet')
+
+@st.cache_data
+def load_base_complete():
+    list_df = [pd.read_parquet(f"base_complete_part_{i}.parquet") for i in range(10)]
+    df_base = pd.concat(list_df, ignore_index=True)
+    df_base = df_base[df_base["PMUN21"] > 20000]
+    df_base['LIBGEO'] = df_base['LIBGEO'].astype(str)
+    return df_base
+
+# === CHARGEMENT DES DONNÉES avec Spinner pour joli affichage ===
+with st.spinner('📦 Chargement des bases de données...'):
+    df_sante = load_sante()
+    df_diplomes = load_diplomes()
+    df_crimes = load_crimes()
+    df_base = load_base_complete()
+
 
 # === BACKGROUNDS PAR ONGLET ===
 backgrounds = {
@@ -82,8 +102,10 @@ def get_weather_forecast(ville, api_key, n=5):
         url = f"http://api.openweathermap.org/data/2.5/forecast?q={ville},FR&appid={api_key}&units=metric&lang=fr"
         response = requests.get(url)
         data = response.json()
+        
         if data.get("cod") != "200":
-            return [f"Erreur API : {data.get('message', 'inconnue')}"]
+            # API retourne une erreur ➔ on retourne 2 listes vides
+            return [], []
 
         matin, soir = [], []
 
@@ -105,94 +127,10 @@ def get_weather_forecast(ville, api_key, n=5):
                 soir.append((date, temp, desc, icon_url))
 
         return matin[:n], soir[:n]
+    
     except Exception as e:
-        return [f"Exception : {str(e)}"]
-
-
-
-# === AFFICHAGE DES DONNÉES ===
-def get_data(ville):
-    return df_base[df_base['LIBGEO'] == ville].iloc[0]
-
-def afficher_meteo(ville, col):
-    meteo = get_weather_forecast(ville, API_KEY)
-    if isinstance(meteo, list):
-        st.markdown("#### ☀️ Prévisions à midi (5 jours)", unsafe_allow_html=True)
-        cols = st.columns(5)  # 5 jours
-
-        for i, ligne in enumerate(meteo):
-            if isinstance(ligne, str):
-                st.error(ligne)
-            else:
-                date, temp, desc, icon = ligne
-
-                with cols[i]:
-                    st.markdown(f"""
-                        <div style="background-color: rgba(255,255,255,0.85); padding: 10px; border-radius: 12px; text-align: center; box-shadow: 1px 1px 6px rgba(0,0,0,0.1);">
-                            <h5>{date}</h5>
-                            <img src="{icon}" width="60">
-                            <p style="margin:5px 0;">🌡️ {temp}°C</p>
-                            <small>{desc}</small>
-                        </div>
-                    """, unsafe_allow_html=True)
-    else:
-        col.warning("Prévisions météo indisponibles.")
-
-
-def show_population(data, col, ville):
-    with col:
-            st.markdown("### 🌍 Données Générales", unsafe_allow_html=True)
-
-            # Bloc population + densité avec encadré
-            st.markdown(
-                f"""
-                <div style="background-color: rgba(255, 255, 255, 0.8); padding: 15px; border-radius: 15px; box-shadow: 2px 2px 10px rgba(0,0,0,0.1); margin-bottom: 20px;">
-                    <h4>👥 Population : {int(data['PMUN21'])}</h4>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-    # Météo stylée
-# --- Prévisions météo (matin + soir, 5 jours) ---
-    col.markdown("#### 🌤️ Prévisions météo (matin et soir – 5 jours)")
-
-    meteo_matin, meteo_soir = get_weather_forecast(ville, API_KEY)
-
-    for i in range(len(meteo_matin)):
-        date = meteo_matin[i][0]
-
-        col.markdown(
-            f"""
-            <div style='
-                background: rgba(255, 255, 255, 0.7);
-                padding: 15px;
-                margin: 10px 0;
-                border-radius: 15px;
-                box-shadow: 2px 2px 12px rgba(0,0,0,0.1);
-                font-size: 16px;
-            '>
-                <h5 style='margin-bottom:10px; text-align:center;'>{date}</h5>
-                <div style='display: flex; justify-content: space-around; align-items: center;'>
-                    <div style='text-align:center;'>
-                        <strong>🌅 Matin</strong><br>
-                        🌡️ {meteo_matin[i][1]}°C<br>
-                        {meteo_matin[i][2]}<br>
-                        <img src="{meteo_matin[i][3]}" width="50">
-                    </div>
-                    <div style='text-align:center;'>
-                        <strong>🌇 Soir</strong><br>
-                        🌡️ {meteo_soir[i][1]}°C<br>
-                        {meteo_soir[i][2]}<br>
-                        <img src="{meteo_soir[i][3]}" width="50">
-                    </div>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-
+        # En cas d'erreur réseau ou autre ➔ on retourne 2 listes vides
+        return [], []
 
 def show_logement(data, col):
     # Titre
@@ -435,6 +373,63 @@ def show_diplomes(ville, col):
     except Exception as e:
         col.error(f"Erreur : {e}")
 
+
+def show_population(data, col, ville):
+    with col:
+        st.markdown("### 🌍 Données Générales", unsafe_allow_html=True)
+
+        # Bloc population + densité avec encadré
+        st.markdown(
+            f"""
+            <div style="background-color: rgba(255, 255, 255, 0.8); padding: 15px; border-radius: 15px; box-shadow: 2px 2px 10px rgba(0,0,0,0.1); margin-bottom: 20px;">
+                <h4>👥 Population : {int(data['PMUN21'])}</h4>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    # --- Affichage de la météo (matin et soir, 5 jours) ---
+    meteo_matin, meteo_soir = get_weather_forecast(ville, API_KEY)
+
+    if meteo_matin and meteo_soir:
+        col.markdown("#### 🌤️ Prévisions météo (matin et soir – 5 jours)")
+
+        for i in range(len(meteo_matin)):
+            date = meteo_matin[i][0]
+
+            col.markdown(
+                f"""
+                <div style='
+                    background: rgba(255, 255, 255, 0.7);
+                    padding: 15px;
+                    margin: 10px 0;
+                    border-radius: 15px;
+                    box-shadow: 2px 2px 12px rgba(0,0,0,0.1);
+                    font-size: 16px;
+                '>
+                    <h5 style='margin-bottom:10px; text-align:center;'>{date}</h5>
+                    <div style='display: flex; justify-content: space-around; align-items: center;'>
+                        <div style='text-align:center;'>
+                            <strong>🌅 Matin</strong><br>
+                            🌡️ {meteo_matin[i][1]}°C<br>
+                            {meteo_matin[i][2]}<br>
+                            <img src="{meteo_matin[i][3]}" width="50">
+                        </div>
+                        <div style='text-align:center;'>
+                            <strong>🌇 Soir</strong><br>
+                            🌡️ {meteo_soir[i][1]}°C<br>
+                            {meteo_soir[i][2]}<br>
+                            <img src="{meteo_soir[i][3]}" width="50">
+                        </div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+
+def get_data(ville):
+    return df_base[df_base['LIBGEO'] == ville].iloc[0]
 
 # === COMPARAISON DES VILLES ===
 data1 = get_data(ville1)
